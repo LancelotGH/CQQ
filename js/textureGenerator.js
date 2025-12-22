@@ -5,7 +5,7 @@ class TextureGenerator {
     static generateTextures(scene) {
         const graphics = scene.make.graphics({ x: 0, y: 0, add: false });
 
-        // 1. Grid Tile
+        // 1. Grid Tile (Themed)
         const generateTile = (key, color) => {
             if (scene.textures.exists(key)) return;
             graphics.clear();
@@ -13,8 +13,14 @@ class TextureGenerator {
             graphics.fillRect(0, 0, GAME_CONFIG.gridSize, GAME_CONFIG.gridSize);
             graphics.generateTexture(key, GAME_CONFIG.gridSize, GAME_CONFIG.gridSize);
         };
-        generateTile('tile_light', 0xF0D9B5);
-        generateTile('tile_dark', 0xB58863);
+
+        // Player Theme (Blue)
+        generateTile('tile_player_light', GAME_CONFIG.colors.boardThemes.player.light);
+        generateTile('tile_player_dark', GAME_CONFIG.colors.boardThemes.player.dark);
+
+        // Enemy Theme (Red)
+        generateTile('tile_enemy_light', GAME_CONFIG.colors.boardThemes.enemy.light);
+        generateTile('tile_enemy_dark', GAME_CONFIG.colors.boardThemes.enemy.dark);
 
         // 2. Units & Icons Placeholder (Procedural Fallback if image missing)
         const drawBox = (key, color, label, size = GAME_CONFIG.gridSize) => {
@@ -30,6 +36,7 @@ class TextureGenerator {
         drawBox('proc_warrior', GAME_CONFIG.colors.player.warrior, 'W');
         drawBox('proc_archer', GAME_CONFIG.colors.player.archer, 'A');
         drawBox('proc_mage', GAME_CONFIG.colors.player.mage, 'M');
+        drawBox('proc_knight', GAME_CONFIG.colors.player.knight, 'K');
 
         drawBox('proc_melee_minion', GAME_CONFIG.colors.enemy.minion, 'G'); // Goblin
         drawBox('proc_ranged_minion', GAME_CONFIG.colors.enemy.ranged, 'S'); // Spear

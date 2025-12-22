@@ -50,8 +50,11 @@ class Unit extends Phaser.GameObjects.Container {
     }
 
     updatePosition() {
-        const startY = this.isPlayer ? GAME_CONFIG.playerGridTop : GAME_CONFIG.enemyGridTop;
-        const gridXOffset = (GAME_CONFIG.width - (4 * GAME_CONFIG.gridSize + 3 * GAME_CONFIG.gridGap)) / 2 + GAME_CONFIG.gridSize / 2;
+        // Use scene-calculated anchors
+        const startY = this.isPlayer ? this.scene.playerGridTop : this.scene.enemyGridTop;
+        const cols = this.scene.cols || 4; // Fallback to 4 if scene.cols not defined
+        const fullWidth = cols * GAME_CONFIG.gridSize + (cols - 1) * GAME_CONFIG.gridGap;
+        const gridXOffset = (GAME_CONFIG.width - fullWidth) / 2 + GAME_CONFIG.gridSize / 2;
 
         this.x = gridXOffset + this.gridCol * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
         this.y = startY + this.gridRow * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);

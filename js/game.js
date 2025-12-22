@@ -20,6 +20,11 @@ class BattleScene extends Phaser.Scene {
         const levelId = data.level || 1;
         this.levelConfig = GAME_CONFIG.levels.find(l => l.id === levelId);
 
+        // -- DYNAMIC GRID CONFIG --
+        this.cols = this.levelConfig.cols || 4;
+        this.playerRows = this.levelConfig.playerRows || 4;
+        this.enemyRows = 4; // Will be set per wave
+
         this.waveIndex = 0;
         this.turn = 'PLAYER';
         this.isBusy = false;
@@ -29,16 +34,28 @@ class BattleScene extends Phaser.Scene {
         this.deck = {
             warrior: 12,
             archer: 10,
-            mage: 8
+            mage: 8,
+            knight: 8
         };
 
         this.createHUD();
 
-        this.drawGridBackground(GAME_CONFIG.enemyGridTop, 4, 4);
-        this.drawGridBackground(GAME_CONFIG.playerGridTop, 4, 4);
+        // -- LAYOUT CALCULATION --
+        // Anchor at boardMeetingY.
+        // Player grows Downwards from meeting point + half gap
+        // Enemy grows Upwards from meeting point - half gap
+        const halfGap = (GAME_CONFIG.boardGap !== undefined ? GAME_CONFIG.boardGap : 0) / 2;
+        this.playerGridTop = GAME_CONFIG.boardMeetingY + halfGap;
 
-        this.playerGrid = Array(4).fill(null).map(() => Array(4).fill(null));
-        this.enemyGrid = Array(4).fill(null).map(() => Array(4).fill(null));
+        // Initial Enemy Top (will be updated in spawnWave)
+        this.enemyGridTop = GAME_CONFIG.boardMeetingY - halfGap - (4 * GAME_CONFIG.gridSize);
+
+        // Initial render (Player Grid is static per level)
+        this.drawGridBackground('player', this.playerGridTop, this.playerRows, this.cols);
+
+        // Initialize Grids
+        this.playerGrid = Array(this.playerRows).fill(null).map(() => Array(this.cols).fill(null));
+        this.enemyGrid = []; // Initialized in spawnWave
 
         this.spawnInitialUnits();
 
@@ -46,7 +63,7 @@ class BattleScene extends Phaser.Scene {
     }
 
     getDeckCount() {
-        return this.deck.warrior + this.deck.archer + this.deck.mage;
+        return Object.values(this.deck).reduce((a, b) => a + b, 0);
     }
 
     createHUD() {
@@ -60,9 +77,13 @@ class BattleScene extends Phaser.Scene {
         const bottomY = GAME_CONFIG.height - deckHeight;
         this.add.rectangle(0, bottomY, GAME_CONFIG.width, deckHeight, 0x000000, 0.8).setOrigin(0);
 
-        this.createDeckIcon(40, bottomY + 40, 'warrior');
-        this.createDeckIcon(110, bottomY + 40, 'archer');
-        this.createDeckIcon(180, bottomY + 40, 'mage');
+        let xPos = 40;
+        Object.keys(this.deck).forEach(type => {
+            if (this.deck[type] > 0 || true) { // Show all keys defined in deck
+                this.createDeckIcon(xPos, bottomY + 40, type);
+                xPos += 70;
+            }
+        });
 
         this.createIconButton(GAME_CONFIG.width - 100, bottomY + 40, 'icon_restart', 0xe67e22, () => this.scene.restart({ level: this.levelConfig.id }));
         this.createIconButton(GAME_CONFIG.width - 40, bottomY + 40, 'icon_exit', 0xc0392b, () => this.scene.start('LevelSelectScene'));
@@ -93,8 +114,18 @@ class BattleScene extends Phaser.Scene {
         this.txt_mage.setText(this.deck.mage);
     }
 
-    drawGridBackground(startY, rows, cols) {
-        const startX = (GAME_CONFIG.width - (cols * GAME_CONFIG.gridSize + (cols - 1) * GAME_CONFIG.gridGap)) / 2 + GAME_CONFIG.gridSize / 2;
+    drawGridBackground(theme, startY, rows, cols) {
+        // If re-drawing (e.g. enemy grid resize), we should probably clear old tiles first?
+        // Since we don't track them easily, let's assume this is only called when needed or on top (optimization later if needed)
+        // Actually, for dynamic enemy grid, we might need a container or clear mechanism. 
+        // For now, let's just clear if it's the Enemy Grid.
+        if (theme === 'enemy') {
+            if (this.enemyBgGroup) this.enemyBgGroup.destroy(true);
+            this.enemyBgGroup = this.add.group();
+        }
+
+        const fullWidth = cols * GAME_CONFIG.gridSize + (cols - 1) * GAME_CONFIG.gridGap;
+        const startX = (GAME_CONFIG.width - fullWidth) / 2 + GAME_CONFIG.gridSize / 2;
 
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
@@ -102,58 +133,106 @@ class BattleScene extends Phaser.Scene {
                 const y = startY + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
 
                 const isLight = (r + c) % 2 === 0;
-                const key = isLight ? 'tile_light' : 'tile_dark';
-                this.add.image(x, y, key).setOrigin(0.5).setDepth(-10);
+                // Theme: 'player' or 'enemy' -> tile_player_light / tile_enemy_dark
+                const key = `tile_${theme}_${isLight ? 'light' : 'dark'}`;
+
+                const tile = this.add.image(x, y, key).setOrigin(0.5).setDepth(-10);
+                if (theme === 'enemy' && this.enemyBgGroup) {
+                    this.enemyBgGroup.add(tile);
+                }
             }
         }
     }
 
     spawnInitialUnits() {
-        for (let r = 0; r < 4; r++) { for (let c = 0; c < 4; c++) { this.spawnPlayerUnit(c, r); } }
+        for (let r = 0; r < this.playerRows; r++) {
+            for (let c = 0; c < this.cols; c++) {
+                this.spawnPlayerUnit(c, r);
+            }
+        }
         this.spawnWave(0);
     }
 
     spawnWave(waveIdx) {
+        // Clear existing enemies
         this.enemyGrid.flat().forEach(u => { if (u) u.destroy(); });
-        this.enemyGrid = Array(4).fill(null).map(() => Array(4).fill(null));
 
         const waveConfig = this.levelConfig.waves[waveIdx];
         if (!waveConfig) return;
 
         this.waveText.setText(`Wave ${waveIdx + 1}/${this.levelConfig.waves.length}`);
 
-        let unitsToSpawn = [];
-        waveConfig.forEach(entry => {
-            for (let i = 0; i < entry.count; i++) unitsToSpawn.push(entry.type);
-        });
+        // -- DYNAMIC ENEMY GRID SIZING --
+        const newEnemyRows = waveConfig.enemyRows || 4;
 
-        unitsToSpawn.forEach(type => {
-            const emptySpots = [];
-            for (let r = 0; r < 4; r++) {
-                for (let c = 0; c < 4; c++) {
-                    if (!this.enemyGrid[r][c]) {
-                        if (type.includes('boss')) {
-                            if (r < 3 && c < 3 && !this.enemyGrid[r][c + 1] && !this.enemyGrid[r + 1][c] && !this.enemyGrid[r + 1][c + 1]) {
+        // Calculate new Top based on Meeting Point
+        const halfGap = (GAME_CONFIG.boardGap !== undefined ? GAME_CONFIG.boardGap : 0) / 2;
+        const newEnemyGridTop = GAME_CONFIG.boardMeetingY - halfGap - (newEnemyRows * GAME_CONFIG.gridSize);
+
+        // Redraw only if changed (or always to be safe/simple for now)
+        if (this.enemyRows !== newEnemyRows || this.enemyGridTop !== newEnemyGridTop || waveIdx === 0) {
+            this.enemyRows = newEnemyRows;
+            this.enemyGridTop = newEnemyGridTop;
+            this.drawGridBackground('enemy', this.enemyGridTop, this.enemyRows, this.cols);
+        }
+
+        this.enemyGrid = Array(this.enemyRows).fill(null).map(() => Array(this.cols).fill(null));
+
+        // -- PLACEMENT LOGIC --
+        // 1. Process Fixed Placements
+        if (waveConfig.placements) {
+            waveConfig.placements.forEach(p => {
+                if (p.r < this.enemyRows && p.c < this.cols) {
+                    if (p.type.includes('boss')) {
+                        const boss = new BossUnit(this, p.type);
+                        this.addEnemyUnit(boss, p.c, p.r);
+                    } else {
+                        const unit = new EnemyUnit(this, p.c, p.r, p.type);
+                        this.addEnemyUnit(unit, p.c, p.r);
+                    }
+                }
+            });
+        }
+
+        // 2. Process Random Units
+        if (waveConfig.units) {
+            let unitsToSpawn = [];
+            waveConfig.units.forEach(entry => {
+                for (let i = 0; i < entry.count; i++) unitsToSpawn.push(entry.type);
+            });
+
+            unitsToSpawn.forEach(type => {
+                const emptySpots = [];
+                for (let r = 0; r < this.enemyRows; r++) {
+                    for (let c = 0; c < this.cols; c++) {
+                        if (!this.enemyGrid[r][c]) {
+                            if (type.includes('boss')) {
+                                // Boss needs 2x2 space
+                                if (r < this.enemyRows - 1 && c < this.cols - 1 &&
+                                    !this.enemyGrid[r][c + 1] &&
+                                    !this.enemyGrid[r + 1][c] &&
+                                    !this.enemyGrid[r + 1][c + 1]) {
+                                    emptySpots.push({ r, c });
+                                }
+                            } else {
                                 emptySpots.push({ r, c });
                             }
-                        } else {
-                            emptySpots.push({ r, c });
                         }
                     }
                 }
-            }
 
-            if (emptySpots.length > 0) {
-                const spot = emptySpots[Math.floor(Math.random() * emptySpots.length)];
-                if (type.includes('boss')) {
-                    const boss = new BossUnit(this, type);
-                    this.addEnemyUnit(boss, spot.c, spot.r);
-                } else {
-                    const unit = new EnemyUnit(this, spot.c, spot.r, type);
-                    this.addEnemyUnit(unit, spot.c, spot.r);
+                if (emptySpots.length > 0) {
+                    const spot = emptySpots[Math.floor(Math.random() * emptySpots.length)];
+                    if (type.includes('boss')) {
+                        const boss = new BossUnit(this, type);
+                        this.addEnemyUnit(boss, spot.c, spot.r);
+                    } else {
+                        const unit = new EnemyUnit(this, spot.c, spot.r, type);
+                        this.addEnemyUnit(unit, spot.c, spot.r);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     spawnPlayerUnit(col, row) {
@@ -202,6 +281,10 @@ class BattleScene extends Phaser.Scene {
             return a.gridCol - b.gridCol;
         });
 
+        // Unified Combo Bonus: All units get bonus based on total chain length
+        // 2 units -> +20%, 3 units -> +40%, etc.
+        const damageMod = 1 + ((chain.length - 1) * 0.2);
+
         for (const u of chain) {
             if (u.isDead) continue;
 
@@ -214,21 +297,14 @@ class BattleScene extends Phaser.Scene {
 
                 // Mage AoE Logic (2x2)
                 if (u.type === 'mage') {
-                    // Get Neighboring cells relative to Primary Target: Right, Bottom, Bottom-Right? 
-                    // Or "Range Circle". Usually "Target + Right + Top + TopRight" or "Bottom-Right"?
-                    // Let's assume 2x2 anchored top-left at target (i.e., Target, Right, Bottom, BottomRight).
-                    // However, enemy grid coords are [row][col].
-                    // Let's use the primary target as the Top-Left of the 2x2 box.
-
+                    // Logic remains same...
                     const r = primary.gridRow;
                     const c = primary.gridCol;
-                    const offsets = [
-                        { r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }
-                    ];
+                    const offsets = [{ r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }];
                     offsets.forEach(off => {
                         const nR = r + off.r;
                         const nC = c + off.c;
-                        if (nR < 4 && nC < 4 && this.enemyGrid[nR][nC] && !this.enemyGrid[nR][nC].isDead) {
+                        if (nR < this.enemyRows && nC < this.cols && this.enemyGrid[nR][nC] && !this.enemyGrid[nR][nC].isDead) {
                             if (!unitsToHit.includes(this.enemyGrid[nR][nC])) {
                                 unitsToHit.push(this.enemyGrid[nR][nC]);
                             }
@@ -236,13 +312,35 @@ class BattleScene extends Phaser.Scene {
                     });
                 }
 
+                // Knight Logic (Piercing)
+                if (u.type === 'knight') {
+                    if (primary.gridRow > 0) {
+                        const behind = this.enemyGrid[primary.gridRow - 1][primary.gridCol];
+                        if (behind && !behind.isDead && !unitsToHit.includes(behind)) {
+                            unitsToHit.push(behind);
+                        }
+                    }
+                }
+
                 // Animation
-                await this.animateAttack(u, primary, u.type === 'mage'); // Pass isMage flag
+                if (u.type === 'knight') {
+                    await this.animateCharge(u, primary.y + GAME_CONFIG.gridSize * 0.5);
+                } else {
+                    await this.animateAttack(u, primary, u.type === 'mage');
+                }
 
                 // Damage
                 unitsToHit.forEach(target => {
                     if (target && !target.isDead) {
-                        target.takeDamage(u.atk);
+                        let finalDamage = Math.floor(u.atk * damageMod);
+
+                        // Knight Pierce Reduction
+                        if (u.type === 'knight' && target !== primary) {
+                            finalDamage = Math.floor(finalDamage * 0.5);
+                            this.showFloatingText(target.x, target.y - 60, "Pierce!", 0xbdc3c7);
+                        }
+
+                        target.takeDamage(finalDamage);
                         if (target.hp <= 0 && !target.countedDefeat) {
                             target.countedDefeat = true;
                             this.enemiesDefeated++;
@@ -250,9 +348,18 @@ class BattleScene extends Phaser.Scene {
                         }
                     }
                 });
+
+                if (damageMod > 1) {
+                    this.showFloatingText(u.x, u.y - 40, `x${damageMod.toFixed(1)}!`, 0xf1c40f);
+                }
+
             } else {
-                // No target found, just vanish
-                await this.animateVanish(u);
+                // No target found
+                if (u.type === 'knight') {
+                    await this.animateCharge(u, this.enemyGridTop - 100);
+                } else {
+                    await this.animateVanish(u);
+                }
             }
 
             // Remove Unit
@@ -296,7 +403,7 @@ class BattleScene extends Phaser.Scene {
             const isMelee = (u.type === 'warrior');
 
             if (isMelee) {
-                const targetY = target ? target.y + GAME_CONFIG.gridSize * 0.5 : GAME_CONFIG.enemyGridTop;
+                const targetY = target ? target.y + GAME_CONFIG.gridSize * 0.5 : this.enemyGridTop;
                 this.tweens.add({
                     targets: u,
                     y: targetY,
@@ -353,6 +460,29 @@ class BattleScene extends Phaser.Scene {
         });
     }
 
+    animateCharge(u, targetY) {
+        return new Promise(resolve => {
+            const startY = u.y;
+            // 1. Wind up
+            this.tweens.add({
+                targets: u,
+                y: startY + 20,
+                duration: 100,
+                yoyo: true,
+                onComplete: () => {
+                    // 2. Charge
+                    this.tweens.add({
+                        targets: u,
+                        y: targetY,
+                        duration: 150, // Fast
+                        ease: 'Back.easeOut', // Impact feel
+                        onComplete: resolve
+                    });
+                }
+            });
+        });
+    }
+
     animateVanish(u) {
         return new Promise(resolve => {
             this.tweens.add({
@@ -384,7 +514,7 @@ class BattleScene extends Phaser.Scene {
             ];
 
             for (const n of neighbors) {
-                if (n.r >= 0 && n.r < 4 && n.c >= 0 && n.c < 4) {
+                if (n.r >= 0 && n.r < this.playerRows && n.c >= 0 && n.c < this.cols) {
                     const neighborUnit = this.playerGrid[n.r][n.c];
                     if (neighborUnit && neighborUnit.type === type && !visited.has(neighborUnit) && !neighborUnit.isDead) {
                         stack.push(neighborUnit);
@@ -411,10 +541,26 @@ class BattleScene extends Phaser.Scene {
                 return [enemies[0]];
             }
 
+            // Knight: Strict Same Column
+            if (unit.type === 'knight') {
+                const checkCol = (col) => {
+                    if (col < 0 || col >= this.cols) return null;
+                    // Check from Bottom (enemyRows-1) to Top (0)
+                    for (let r = this.enemyRows - 1; r >= 0; r--) {
+                        const enemy = this.enemyGrid[r][col];
+                        if (enemy && !enemy.isDead) return enemy;
+                    }
+                    return null;
+                };
+                const target = checkCol(unit.gridCol);
+                return target ? [target] : [];
+            }
+
             // Warrior/Archer: Column
             const checkCol = (col) => {
-                if (col < 0 || col >= 4) return null;
-                for (let r = 3; r >= 0; r--) {
+                if (col < 0 || col >= this.cols) return null;
+                // Check from Bottom (enemyRows-1) to Top (0)
+                for (let r = this.enemyRows - 1; r >= 0; r--) {
                     const enemy = this.enemyGrid[r][col];
                     if (enemy && !enemy.isDead) return enemy;
                 }
@@ -432,6 +578,11 @@ class BattleScene extends Phaser.Scene {
             if (rightTarget) candidates.push(rightTarget);
 
             if (candidates.length > 0) {
+                // Should prioritize Front-most? Usually enemies are top-down. Player is bottom-up.
+                // Warriors hit front-most enemy (largest row index? No, Enemy 0 is Top. Enemy MAX is Bottom/Front)
+                // Wait, "Front line" for player is looking up. 
+                // Enemy Grid: 0 is Top (Back), MAX is Bottom (Front facing player).
+                // So yes, we want Max Row (closest to player).
                 candidates.sort((a, b) => b.gridRow - a.gridRow);
                 return [candidates[0]];
             }
@@ -453,8 +604,9 @@ class BattleScene extends Phaser.Scene {
 
             // Normal Minions: Column (Front-most first, so Row 0 upwards)
             const checkCol = (col) => {
-                if (col < 0 || col >= 4) return null;
-                for (let r = 0; r < 4; r++) { // Check from Top (0) to Bottom (3)
+                if (col < 0 || col >= this.cols) return null;
+                // Check from Top (0) to Bottom (playerRows-1)
+                for (let r = 0; r < this.playerRows; r++) {
                     const p = this.playerGrid[r][col];
                     if (p && !p.isDead) return p;
                 }
@@ -495,22 +647,22 @@ class BattleScene extends Phaser.Scene {
     }
 
     async refillPlayerGrid() {
-        for (let c = 0; c < 4; c++) {
+        for (let c = 0; c < this.cols; c++) {
             const colUnits = [];
-            for (let r = 0; r < 4; r++) {
+            for (let r = 0; r < this.playerRows; r++) {
                 if (this.playerGrid[r][c] && !this.playerGrid[r][c].isDead) {
                     colUnits.push(this.playerGrid[r][c]);
                 }
             }
-            for (let r = 0; r < 4; r++) { this.playerGrid[r][c] = null; }
+            for (let r = 0; r < this.playerRows; r++) { this.playerGrid[r][c] = null; }
             for (let r = 0; r < colUnits.length; r++) {
                 const u = colUnits[r];
                 this.playerGrid[r][c] = u;
                 u.gridRow = r;
-                this.tweens.add({ targets: u, y: GAME_CONFIG.playerGridTop + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap), duration: 200 });
+                this.tweens.add({ targets: u, y: this.playerGridTop + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap), duration: 200 });
             }
 
-            for (let r = colUnits.length; r < 4; r++) {
+            for (let r = colUnits.length; r < this.playerRows; r++) {
                 if (this.getDeckCount() > 0) {
                     const available = Object.keys(this.deck).filter(k => this.deck[k] > 0);
                     if (available.length > 0) {
@@ -578,7 +730,7 @@ class BattleScene extends Phaser.Scene {
                         offsets.forEach(off => {
                             const nR = r + off.r;
                             const nC = c + off.c;
-                            if (nR < 4 && nC < 4 && this.playerGrid[nR][nC] && !this.playerGrid[nR][nC].isDead) {
+                            if (nR < this.playerRows && nC < this.cols && this.playerGrid[nR][nC] && !this.playerGrid[nR][nC].isDead) {
                                 if (!unitsToHit.includes(this.playerGrid[nR][nC])) {
                                     unitsToHit.push(this.playerGrid[nR][nC]);
                                 }
@@ -664,41 +816,72 @@ class BattleScene extends Phaser.Scene {
         if (boss.type === 'boss_1') {
             const moves = [];
             if (boss.gridCol > 0) moves.push(-1);
-            if (boss.gridCol < 2) moves.push(1);
+            if (boss.gridCol < this.cols - 2) moves.push(1); // Width 2 units
             if (moves.length > 0) {
                 const dx = moves[Math.floor(Math.random() * moves.length)];
                 await this.moveBoss(boss, boss.gridCol + dx, boss.gridRow);
             }
         } else {
-            const validCols = [0, 1, 2];
-            const validRows = [0, 1, 2];
-            const newCol = validCols[Math.floor(Math.random() * validCols.length)];
-            const newRow = validRows[Math.floor(Math.random() * validRows.length)];
-            await this.moveBoss(boss, newCol, newRow);
+            // Boss 2 Teleport
+            // Calculate valid spots (Width 2, Height 2)
+            const validCols = [];
+            for (let c = 0; c <= this.cols - 2; c++) validCols.push(c);
+
+            const validRows = [];
+            for (let r = 0; r <= this.enemyRows - 2; r++) validRows.push(r);
+
+            if (validCols.length > 0 && validRows.length > 0) {
+                const newCol = validCols[Math.floor(Math.random() * validCols.length)];
+                const newRow = validRows[Math.floor(Math.random() * validRows.length)];
+                await this.moveBoss(boss, newCol, newRow);
+            }
         }
 
         await this.wait(300);
 
         if (boss.type === 'boss_1') {
-            const targetCol = Math.floor(Math.random() * 4);
-            const x = (GAME_CONFIG.width - (4 * GAME_CONFIG.gridSize + 3 * GAME_CONFIG.gridGap)) / 2 + GAME_CONFIG.gridSize / 2 + targetCol * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+            const targetCol = Math.floor(Math.random() * this.cols);
+
+            // Calculate X for visual warning (Column center)
+            const fullWidth = this.cols * GAME_CONFIG.gridSize + (this.cols - 1) * GAME_CONFIG.gridGap;
+            const startX = (GAME_CONFIG.width - fullWidth) / 2 + GAME_CONFIG.gridSize / 2;
+            const x = startX + targetCol * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+
             const w = GAME_CONFIG.gridSize;
-            const h = 4 * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
-            const y = GAME_CONFIG.playerGridTop + h / 2 - GAME_CONFIG.gridSize / 2;
+            const h = this.playerRows * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+            const y = this.playerGridTop + h / 2 - GAME_CONFIG.gridSize / 2; // Center of player grid height-ish
+
             const warning = this.add.rectangle(x, y, w, h, 0xff0000, 0.3);
             await this.wait(800);
             warning.destroy();
-            for (let r = 0; r < 4; r++) { const u = this.playerGrid[r][targetCol]; if (u) u.takeDamage(boss.atk); }
+            for (let r = 0; r < this.playerRows; r++) { const u = this.playerGrid[r][targetCol]; if (u) u.takeDamage(boss.atk); }
         } else {
-            const targetCol = Math.floor(Math.random() * 3);
-            const targetRow = Math.floor(Math.random() * 3);
-            const startX = (GAME_CONFIG.width - (4 * GAME_CONFIG.gridSize + 3 * GAME_CONFIG.gridGap)) / 2 + GAME_CONFIG.gridSize / 2 + targetCol * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
-            const startY = GAME_CONFIG.playerGridTop + targetRow * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
-            const size = GAME_CONFIG.gridSize * 2 + GAME_CONFIG.gridGap;
-            const warning = this.add.rectangle(startX + GAME_CONFIG.gridSize / 2, startY + GAME_CONFIG.gridSize / 2, size, size, 0xff0000, 0.3);
-            await this.wait(800);
-            warning.destroy();
-            for (let r = targetRow; r <= targetRow + 1; r++) { for (let c = targetCol; c <= targetCol + 1; c++) { const u = this.playerGrid[r][c]; if (u) u.takeDamage(boss.atk); } }
+            // Area Crusher (2x2)
+            const maxCol = this.cols - 2;
+            const maxRow = this.playerRows - 2;
+
+            if (maxCol >= 0 && maxRow >= 0) {
+                const targetCol = Math.floor(Math.random() * (maxCol + 1));
+                const targetRow = Math.floor(Math.random() * (maxRow + 1));
+
+                const fullWidth = this.cols * GAME_CONFIG.gridSize + (this.cols - 1) * GAME_CONFIG.gridGap;
+                const startXBase = (GAME_CONFIG.width - fullWidth) / 2 + GAME_CONFIG.gridSize / 2;
+
+                const startX = startXBase + targetCol * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+                const startY = this.playerGridTop + targetRow * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+
+                const size = GAME_CONFIG.gridSize * 2 + GAME_CONFIG.gridGap;
+                // Rectangle pos is center
+                const warning = this.add.rectangle(startX + GAME_CONFIG.gridSize / 2, startY + GAME_CONFIG.gridSize / 2, size, size, 0xff0000, 0.3);
+
+                await this.wait(800);
+                warning.destroy();
+                for (let r = targetRow; r <= targetRow + 1; r++) {
+                    for (let c = targetCol; c <= targetCol + 1; c++) {
+                        const u = this.playerGrid[r][c]; if (u) u.takeDamage(boss.atk);
+                    }
+                }
+            }
         }
     }
 
@@ -717,6 +900,24 @@ class BattleScene extends Phaser.Scene {
     }
 
     wait(ms) { return new Promise(resolve => this.time.delayedCall(ms, resolve)); }
+
+    showFloatingText(x, y, message, color) {
+        const txt = this.add.text(x, y, message, {
+            fontSize: '20px',
+            fontStyle: 'bold',
+            color: typeof color === 'number' ? '#' + color.toString(16) : color,
+            stroke: '#000',
+            strokeThickness: 3
+        }).setOrigin(0.5).setDepth(200);
+
+        this.tweens.add({
+            targets: txt,
+            y: y - 40,
+            alpha: 0,
+            duration: 800,
+            onComplete: () => txt.destroy()
+        });
+    }
 }
 
 const config = {

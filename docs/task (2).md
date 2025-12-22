@@ -89,6 +89,11 @@
     - [x] **Update**: Add new scripts to `index.html`.
     - [x] **Cleanup**: Remove moved code from `game.js`.
 
+- [x] **Optimization: Robust Asset Fallback**
+    - [x] **TextureGenerator**: Generate all unit types procedurally (proc_keys).
+    - [x] **Helper**: Add `getUnitTextureKey` to check asset validity.
+    - [x] **Integration**: Update `Units.js` and `game.js` HUD to use helper.
+
 - [x] Verification <!-- id: 12 -->
 
 - [x] Verification <!-- id: 12 -->
