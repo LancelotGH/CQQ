@@ -34,8 +34,19 @@ class Unit extends Phaser.GameObjects.Container {
         this.add(this.sprite);
 
         // HP Bar
-        this.hpBar = scene.add.rectangle(0, 30, 40, 6, 0x00ff00);
+        const barY = type.includes('boss') ? 65 : 30;
+        const barW = type.includes('boss') ? 80 : 40;
+
+        // Background (Black)
+        this.hpBg = scene.add.rectangle(0, barY, barW + 2, 8, 0x000000);
+        this.add(this.hpBg);
+
+        // Foreground (Hp) - Origin (0, 0.5) for left-to-right fill
+        // x position needs to be center - half width
+        this.hpBar = scene.add.rectangle(-barW / 2, barY, barW, 6, 0x00ff00).setOrigin(0, 0.5);
         this.add(this.hpBar);
+
+        this.updateHpBar(); // Initialize width/color based on type
 
         this.updatePosition();
 
@@ -57,7 +68,8 @@ class Unit extends Phaser.GameObjects.Container {
         const gridXOffset = (GAME_CONFIG.width - fullWidth) / 2 + GAME_CONFIG.gridSize / 2;
 
         this.x = gridXOffset + this.gridCol * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
-        this.y = startY + this.gridRow * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+        // Fix: Add half size to center in cell
+        this.y = startY + this.gridRow * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) + GAME_CONFIG.gridSize / 2;
 
         if (this.type.includes('boss')) {
             const offset = (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) / 2;
@@ -108,8 +120,8 @@ class Unit extends Phaser.GameObjects.Container {
 
     updateHpBar() {
         const pct = Math.max(0, this.hp / this.maxHp);
-        this.hpBar.width = 40 * pct;
-        if (this.type.includes('boss')) this.hpBar.width = 80 * pct;
+        const maxW = this.type.includes('boss') ? 80 : 40;
+        this.hpBar.width = maxW * pct;
 
         this.hpBar.fillColor = pct > 0.5 ? 0x00ff00 : (pct > 0.2 ? 0xf1c40f : 0xff0000);
     }

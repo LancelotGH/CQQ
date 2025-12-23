@@ -130,7 +130,8 @@ class BattleScene extends Phaser.Scene {
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
                 const x = startX + c * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
-                const y = startY + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+                // Fix: Add half grid size because startY is Top Edge, but tile origin is 0.5 (Center)
+                const y = startY + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) + GAME_CONFIG.gridSize / 2;
 
                 const isLight = (r + c) % 2 === 0;
                 // Theme: 'player' or 'enemy' -> tile_player_light / tile_enemy_dark
@@ -297,13 +298,17 @@ class BattleScene extends Phaser.Scene {
 
                 // Mage AoE Logic (2x2)
                 if (u.type === 'mage') {
-                    // Logic remains same...
-                    const r = primary.gridRow;
-                    const c = primary.gridCol;
-                    const offsets = [{ r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }];
+                    // Logic: Base Point = Target
+                    // Area: Target + Right + Bottom + Bottom-Right
+                    const { startR, startC } = this.getAoEClampedOrigin(primary);
+
+                    const offsets = [
+                        { r: 0, c: 0 }, { r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }
+                    ];
                     offsets.forEach(off => {
-                        const nR = r + off.r;
-                        const nC = c + off.c;
+                        const nR = startR + off.r;
+                        const nC = startC + off.c;
+                        // Strict check: Must be in Enemy Grid
                         if (nR < this.enemyRows && nC < this.cols && this.enemyGrid[nR][nC] && !this.enemyGrid[nR][nC].isDead) {
                             if (!unitsToHit.includes(this.enemyGrid[nR][nC])) {
                                 unitsToHit.push(this.enemyGrid[nR][nC]);
@@ -326,6 +331,9 @@ class BattleScene extends Phaser.Scene {
                 if (u.type === 'knight') {
                     await this.animateCharge(u, primary.y + GAME_CONFIG.gridSize * 0.5);
                 } else {
+                    if (u.type === 'mage') {
+                        await this.showAoEWarning(primary, 0x9b59b6);
+                    }
                     await this.animateAttack(u, primary, u.type === 'mage');
                 }
 
@@ -356,9 +364,11 @@ class BattleScene extends Phaser.Scene {
             } else {
                 // No target found
                 if (u.type === 'knight') {
-                    await this.animateCharge(u, this.enemyGridTop - 100);
+                    // Fix: Stop at top of enemy board (don't go out of bounds)
+                    await this.animateCharge(u, this.enemyGridTop + GAME_CONFIG.gridSize * 0.5);
+                    u.die();
                 } else {
-                    await this.animateVanish(u);
+                    u.die(); // Consume unused unit
                 }
             }
 
@@ -413,7 +423,8 @@ class BattleScene extends Phaser.Scene {
                 });
             } else {
                 // Ranged Projectile
-                let projKey = 'proj_arrow';
+                let projKey = 'proj_arrow'; // Default generated/loaded
+                if (u.type === 'archer') projKey = 'proj_arrow'; // Use asset
                 if (u.type === 'mage' || u.type === 'aoe_minion') projKey = 'proj_magic';
                 if (u.type === 'ranged_minion') projKey = 'proj_spear';
 
@@ -438,10 +449,26 @@ class BattleScene extends Phaser.Scene {
                     onComplete: () => {
                         proj.destroy();
                         if (isMage && target) {
-                            // AoE Effect Visuals
-                            const cx = target.x + (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) / 2;
-                            const cy = target.y + (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) / 2;
-                            const radius = GAME_CONFIG.gridSize * 1.2;
+                            // AoE Effect Visuals (Aligned with Clamped Grid)
+                            const { startR, startC, isEnemyTarget } = this.getAoEClampedOrigin(target);
+
+                            // Re-calculate visual position for center of 2x2 block
+                            const gridTop = isEnemyTarget ? this.enemyGridTop : this.playerGridTop;
+                            const fullWidth = this.cols * GAME_CONFIG.gridSize + (this.cols - 1) * GAME_CONFIG.gridGap;
+                            const startXBase = (GAME_CONFIG.width - fullWidth) / 2 + GAME_CONFIG.gridSize / 2;
+
+                            // Top-Left Cell Center
+                            const tlX = startXBase + startC * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+                            // Fix: Use correct Y origin (Center is already offset in my recent fix, so be careful).
+                            // Wait, helper grid drawing uses: gridTop + r*stride + size/2
+                            // So tlY (center of top-left unit) = gridTop + startR*stride + size/2
+                            const stride = GAME_CONFIG.gridSize + GAME_CONFIG.gridGap;
+                            const tlY = gridTop + startR * stride + GAME_CONFIG.gridSize / 2;
+
+                            // Center of 2x2 is (tlX + half_stride, tlY + half_stride)
+                            const cx = tlX + stride / 2;
+                            const cy = tlY + stride / 2;
+                            const radius = GAME_CONFIG.gridSize * 1.5;
 
                             const circle = this.add.circle(cx, cy, radius).setStrokeStyle(4, 0x9b59b6).setDepth(100);
                             this.tweens.add({
@@ -659,7 +686,8 @@ class BattleScene extends Phaser.Scene {
                 const u = colUnits[r];
                 this.playerGrid[r][c] = u;
                 u.gridRow = r;
-                this.tweens.add({ targets: u, y: this.playerGridTop + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap), duration: 200 });
+                // Fix: Add half size to center in cell
+                this.tweens.add({ targets: u, y: this.playerGridTop + r * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) + GAME_CONFIG.gridSize / 2, duration: 200 });
             }
 
             for (let r = colUnits.length; r < this.playerRows; r++) {
@@ -720,16 +748,19 @@ class BattleScene extends Phaser.Scene {
 
                     // AoE Logic
                     if (attacker.type === 'aoe_minion') {
-                        // 2x2 Area Center on Target
-                        const r = target.gridRow;
-                        const c = target.gridCol;
-                        // Target + Right + Bottom + Bottom Right
-                        const offsets = [{ r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }];
+                        // 2x2 Area Center on Target (Base Point)
+                        // Fix: Clamp to ensure 2x2 area is always valid within Player Grid
+                        const startR = Math.min(target.gridRow, Math.max(0, this.playerRows - 2));
+                        const startC = Math.min(target.gridCol, Math.max(0, this.cols - 2));
 
-                        let unitsToHit = [target];
+                        const offsets = [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }];
+                        let unitsToHit = []; // Re-calc from scratch based on area
+
+                        // Add units in 2x2
                         offsets.forEach(off => {
-                            const nR = r + off.r;
-                            const nC = c + off.c;
+                            const nR = startR + off.r;
+                            const nC = startC + off.c;
+                            // Strict check: Must be in Player Grid
                             if (nR < this.playerRows && nC < this.cols && this.playerGrid[nR][nC] && !this.playerGrid[nR][nC].isDead) {
                                 if (!unitsToHit.includes(this.playerGrid[nR][nC])) {
                                     unitsToHit.push(this.playerGrid[nR][nC]);
@@ -737,14 +768,8 @@ class BattleScene extends Phaser.Scene {
                             }
                         });
 
-                        // Visual Warning Circle
-                        const cx = target.x + (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) / 2;
-                        const cy = target.y + (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) / 2;
-                        const radius = GAME_CONFIG.gridSize * 1.2;
-
-                        const warning = this.add.circle(cx, cy, radius, 0x546e7a, 0.4).setDepth(100);
-                        this.tweens.add({ targets: warning, alpha: 0, scale: 1.1, duration: 800, onComplete: () => warning.destroy() });
-                        await this.wait(800);
+                        // Visual Warning (2x2 Grid)
+                        await this.showAoEWarning(target, 0x546e7a);
 
                         // Animate & Damage
                         this.tweens.add({
@@ -789,6 +814,7 @@ class BattleScene extends Phaser.Scene {
                 }
             }
         }
+
 
         // REFILL AFTER ATTACK
         await this.refillPlayerGrid();
@@ -840,7 +866,10 @@ class BattleScene extends Phaser.Scene {
         await this.wait(300);
 
         if (boss.type === 'boss_1') {
-            const targetCol = Math.floor(Math.random() * this.cols);
+            // Fix: Attack one of the two columns in front of the boss
+            // Boss occupies gridCol and gridCol + 1
+            const offset = Math.random() < 0.5 ? 0 : 1;
+            const targetCol = boss.gridCol + offset;
 
             // Calculate X for visual warning (Column center)
             const fullWidth = this.cols * GAME_CONFIG.gridSize + (this.cols - 1) * GAME_CONFIG.gridGap;
@@ -849,7 +878,8 @@ class BattleScene extends Phaser.Scene {
 
             const w = GAME_CONFIG.gridSize;
             const h = this.playerRows * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
-            const y = this.playerGridTop + h / 2 - GAME_CONFIG.gridSize / 2; // Center of player grid height-ish
+            // Fix: Center of warning is Top + Half Height. Removed erroneous - gridSize/2
+            const y = this.playerGridTop + h / 2;
 
             const warning = this.add.rectangle(x, y, w, h, 0xff0000, 0.3);
             await this.wait(800);
@@ -871,8 +901,9 @@ class BattleScene extends Phaser.Scene {
                 const startY = this.playerGridTop + targetRow * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
 
                 const size = GAME_CONFIG.gridSize * 2 + GAME_CONFIG.gridGap;
-                // Rectangle pos is center
-                const warning = this.add.rectangle(startX + GAME_CONFIG.gridSize / 2, startY + GAME_CONFIG.gridSize / 2, size, size, 0xff0000, 0.3);
+                // Rectangle pos is center of the 2x2 area
+                // Fix: Center should be startX + size/2, not startX + gridSize/2
+                const warning = this.add.rectangle(startX + size / 2, startY + size / 2, size, size, 0xff0000, 0.3);
 
                 await this.wait(800);
                 warning.destroy();
@@ -916,6 +947,58 @@ class BattleScene extends Phaser.Scene {
             alpha: 0,
             duration: 800,
             onComplete: () => txt.destroy()
+        });
+    }
+
+    getAoEClampedOrigin(target) {
+        const isEnemyTarget = !target.isPlayer;
+        const maxRows = isEnemyTarget ? this.enemyRows : this.playerRows;
+        // Clamp to ensure 2x2 area is always valid
+        const startR = Math.min(target.gridRow, Math.max(0, maxRows - 2));
+        const startC = Math.min(target.gridCol, Math.max(0, this.cols - 2));
+        return { startR, startC, isEnemyTarget };
+    }
+
+    showAoEWarning(target, color = 0x9b59b6) {
+        // 2x2 Area based on target
+        // Area: Target + Right + Bottom + Bottom-Right
+        const { startR, startC, isEnemyTarget } = this.getAoEClampedOrigin(target);
+
+        const offsets = [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 1, c: 0 }, { r: 1, c: 1 }];
+
+        const rects = [];
+        const maxRows = isEnemyTarget ? this.enemyRows : this.playerRows;
+        const gridTop = isEnemyTarget ? this.enemyGridTop : this.playerGridTop;
+
+        offsets.forEach(off => {
+            const nR = startR + off.r;
+            const nC = startC + off.c;
+
+            if (nR < maxRows && nC < this.cols) {
+                // Draw Rect
+                const x = (GAME_CONFIG.width - (this.cols * GAME_CONFIG.gridSize)) / 2 + nC * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap);
+                const y = gridTop + nR * (GAME_CONFIG.gridSize + GAME_CONFIG.gridGap) + GAME_CONFIG.gridSize / 2;
+
+                const rect = this.add.rectangle(x + GAME_CONFIG.gridSize / 2, y, GAME_CONFIG.gridSize, GAME_CONFIG.gridSize, color, 0.4).setDepth(150);
+                rects.push(rect);
+            }
+        });
+
+        // Current Target Marker
+        const marker = this.add.image(target.x, target.y - 40, 'proj_magic').setTint(color).setDepth(200);
+        this.tweens.add({ targets: marker, y: target.y - 50, yoyo: true, duration: 300, repeat: 1 });
+
+        return new Promise(resolve => {
+            this.tweens.add({
+                targets: rects,
+                alpha: 0,
+                duration: 800,
+                onComplete: () => {
+                    rects.forEach(r => r.destroy());
+                    marker.destroy();
+                    resolve();
+                }
+            });
         });
     }
 }

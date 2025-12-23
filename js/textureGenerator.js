@@ -52,9 +52,10 @@ class TextureGenerator {
         if (!scene.textures.exists('icon_exit')) {
             graphics.clear(); graphics.lineStyle(3, 0xffffff, 1); graphics.moveTo(10, 10); graphics.lineTo(30, 30); graphics.moveTo(30, 10); graphics.lineTo(10, 30); graphics.strokePath(); graphics.generateTexture('icon_exit', 40, 40);
         }
-        // 4. Projectiles (Procedural) - FORCED override or fallback
+        // 4. Projectiles (Procedural) - Fallback if asset missing
         // Arrow
-        if (!scene.textures.exists('proj_arrow') || true) { // Force procedural for now as requested
+        if (!scene.textures.exists('proj_arrow') || scene.textures.get('proj_arrow').key === '__MISSING') {
+            if (scene.textures.exists('proj_arrow')) scene.textures.remove('proj_arrow');
             graphics.clear();
             graphics.fillStyle(0x8e44ad, 0);
             graphics.lineStyle(2, 0x8b4513, 1); graphics.lineBetween(0, 5, 20, 5);
@@ -63,14 +64,16 @@ class TextureGenerator {
             graphics.generateTexture('proj_arrow', 30, 10);
         }
         // Magic Orb
-        if (!scene.textures.exists('proj_magic') || true) {
+        if (!scene.textures.exists('proj_magic') || scene.textures.get('proj_magic').key === '__MISSING') {
+            if (scene.textures.exists('proj_magic')) scene.textures.remove('proj_magic');
             graphics.clear();
             graphics.fillStyle(0x9b59b6, 1); graphics.fillCircle(10, 10, 8);
             graphics.lineStyle(2, 0xdc7633, 1); graphics.strokeCircle(10, 10, 8);
             graphics.generateTexture('proj_magic', 20, 20);
         }
         // Spear
-        if (!scene.textures.exists('proj_spear') || true) {
+        if (!scene.textures.exists('proj_spear') || scene.textures.get('proj_spear').key === '__MISSING') {
+            if (scene.textures.exists('proj_spear')) scene.textures.remove('proj_spear');
             graphics.clear();
             graphics.lineStyle(2, 0x8b4513, 1); graphics.lineBetween(0, 5, 25, 5);
             graphics.fillStyle(0x7f8c8d, 1); graphics.fillTriangle(25, 2, 25, 8, 35, 5);

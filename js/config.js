@@ -72,7 +72,8 @@ const GAME_CONFIG = {
             boss_2: 'assets/Area-Crusher.png'
         },
         projectiles: {
-            spear: 'assets/SpearProj.png'
+            arrow: 'assets/arrow.png',
+            spear: 'assets/arrow.png'
         }
     },
 
